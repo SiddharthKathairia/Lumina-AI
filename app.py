@@ -1,5 +1,5 @@
 import streamlit as st
-import fitz  # PyMuPDF
+import pymupdf as fitz
 import google.generativeai as genai
 from langchain.text_splitter import RecursiveCharacterTextSplitter
 from sentence_transformers import SentenceTransformer
