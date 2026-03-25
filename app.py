@@ -1,156 +1,200 @@
 import streamlit as st
-import pymupdf as fitz
+import PyPDF2
 import google.generativeai as genai
-from sentence_transformers import SentenceTransformer
-import faiss
-import numpy as np
+import re
 import streamlit.components.v1 as components
 
-# ---------------- CONFIG ---------------- #
-st.set_page_config(page_title="Lumina AI Pro", page_icon="✨", layout="wide")
+# 1. Page Configuration
+st.set_page_config(page_title="Lumina AI", page_icon="✨", layout="centered")
 
+# 2. ULTRA-PREMIUM CSS OVERRIDE
+# This handles the background animation, glassmorphism, and custom typography
+custom_css = """
+<style>
+@import url('https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;600;800&display=swap');
+
+html, body, [class*="css"]  {
+    font-family: 'Outfit', sans-serif;
+}
+
+.stApp {
+    background: linear-gradient(-45deg, #0f0c29, #302b63, #0f0c29, #24243e);
+    background-size: 400% 400%;
+    animation: gradientBG 15s ease infinite;
+}
+
+@keyframes gradientBG {
+    0% { background-position: 0% 50%; }
+    50% { background-position: 100% 50%; }
+    100% { background-position: 0% 50%; }
+}
+
+#MainMenu, footer, header {visibility: hidden !important;}
+
+/* Glassmorphism Effect for containers */
+div[data-testid="stVerticalBlock"] > div[style*="flex-direction: column;"] > div[data-testid="stVerticalBlock"] {
+    background: rgba(255, 255, 255, 0.03);
+    backdrop-filter: blur(16px);
+    -webkit-backdrop-filter: blur(16px);
+    border-radius: 24px;
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    padding: 2rem;
+    box-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.3);
+}
+
+/* Custom Primary Button */
+button[kind="primary"] {
+    background: linear-gradient(90deg, #8A2BE2, #FF4B4B) !important;
+    border: none !important;
+    color: white !important;
+    font-size: 1.2rem !important;
+    font-weight: 600 !important;
+    border-radius: 50px !important;
+    padding: 0.75rem 2rem !important;
+    transition: all 0.3s ease !important;
+}
+
+button[kind="primary"]:hover {
+    box-shadow: 0 0 25px rgba(138, 43, 226, 0.6) !important;
+    transform: scale(1.02) !important;
+}
+
+.lumina-title {
+    font-size: 5rem;
+    font-weight: 800;
+    text-align: center;
+    background: linear-gradient(to right, #b92b27, #1565C0);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    filter: drop-shadow(0px 0px 10px rgba(138, 43, 226, 0.3));
+}
+
+.lumina-subtitle {
+    text-align: center;
+    color: #A0AEC0;
+    font-size: 1.2rem;
+    font-weight: 300;
+}
+
+.stTabs [aria-selected="true"] {
+    background-color: rgba(138, 43, 226, 0.2) !important;
+    border-bottom: 2px solid #8A2BE2 !important;
+}
+</style>
+"""
+st.markdown(custom_css, unsafe_allow_html=True)
+
+# 3. AI CONFIGURATION
+# Pulls the key safely from Streamlit Secrets
 genai.configure(api_key=st.secrets["GEMINI_API_KEY"])
-model = genai.GenerativeModel("gemini-2.5-flash")
+model = genai.GenerativeModel('gemini-2.5-flash')
 
-embedder = SentenceTransformer("all-MiniLM-L6-v2")
+# Helper function to render Mermaid.js graphs
+def mermaid_render(code: str):
+    components.html(
+        f"""
+        <div class="mermaid" style="display: flex; justify-content: center; background-color: white; padding: 30px; border-radius: 15px;">
+            {code}
+        </div>
+        <script type="module">
+            import mermaid from 'https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.esm.min.mjs';
+            mermaid.initialize({{ startOnLoad: true, theme: 'neutral' }});
+        </script>
+        """,
+        height=550
+    )
 
-# ---------------- PDF ---------------- #
-def extract_pdf(file):
-    doc = fitz.open(stream=file.read(), filetype="pdf")
-    text = ""
-    for page in doc:
-        text += page.get_text()
-    return text
+# 4. INITIALIZE APP MEMORY
+if 'pdf_text' not in st.session_state:
+    st.session_state['pdf_text'] = ""
+if 'notes' not in st.session_state:
+    st.session_state['notes'] = ""
+if 'graph_code' not in st.session_state:
+    st.session_state['graph_code'] = ""
 
-# ---------------- CHUNK ---------------- #
-def chunk_text(text, size=800, overlap=150):
-    chunks = []
-    i = 0
-    while i < len(text):
-        chunks.append(text[i:i+size])
-        i += size - overlap
-    return chunks
+# 5. HERO UI
+st.markdown("<div class='lumina-title'>Lumina</div>", unsafe_allow_html=True)
+st.markdown("<div class='lumina-subtitle'>Artificial Intelligence Study Engine</div><br>", unsafe_allow_html=True)
 
-# ---------------- VECTOR ---------------- #
-def create_vector_store(chunks):
-    emb = embedder.encode(chunks)
-    index = faiss.IndexFlatL2(emb.shape[1])
-    index.add(np.array(emb))
-    return index
+# 6. INPUT SECTION
+with st.container():
+    st.markdown("### 📄 1. Load Material")
+    file = st.file_uploader("Upload PDF", type=["pdf"], label_visibility="collapsed")
 
-def retrieve(q, chunks, index, k=3):
-    e = embedder.encode([q])
-    _, idx = index.search(np.array(e), k)
-    return [chunks[i] for i in idx[0]]
+st.markdown("<br>", unsafe_allow_html=True)
 
-# ---------------- AI ---------------- #
-def ask_ai(prompt):
-    return model.generate_content(prompt).text
+with st.container():
+    st.markdown("### 🎛️ 2. Strategy")
+    c1, c2 = st.columns(2)
+    with c1:
+        mode = st.selectbox("Style", ["Academic Deep-Dive", "Explain Like I'm 5", "Exam Revision"])
+    with c2:
+        count = st.number_input("Questions", 1, 10, 5)
 
-# ---------------- MERMAID ---------------- #
-def render_mermaid(code):
-    components.html(f"""
-    <div class="mermaid">{code}</div>
-    <script type="module">
-    import mermaid from 'https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.esm.min.mjs';
-    mermaid.initialize({{startOnLoad:true}});
-    </script>
-    """, height=500)
+st.markdown("<br>", unsafe_allow_html=True)
 
-# ---------------- SESSION ---------------- #
-for k in ["chunks","index","preview","notes"]:
-    if k not in st.session_state:
-        st.session_state[k] = None
-
-# ---------------- UI ---------------- #
-st.title("✨ Lumina AI Pro")
-st.caption("AI Learning Intelligence Engine")
-
-file = st.file_uploader("Upload PDF", type=["pdf"])
-
-mode = st.selectbox("Mode", ["Deep Dive","Exam","Simple"])
-persona = st.selectbox("Persona", ["Professor","Beginner","CEO","Researcher"])
-
-# ---------------- PROCESS ---------------- #
+# 7. CORE LOGIC
 if file:
-    if st.button("🚀 Analyze"):
-        with st.spinner("Processing..."):
+    if st.button("✨ IGNITE INTELLIGENCE", type="primary", use_container_width=True):
+        with st.spinner("Processing document & mapping knowledge..."):
+            
+            # Extract Text
+            reader = PyPDF2.PdfReader(file)
+            text = "".join([p.extract_text() for p in reader.pages])
+            st.session_state['pdf_text'] = text
+            
+            # THE BULLETPROOF PROMPT
+            prompt = f"""
+            You are Lumina, an elite AI teaching assistant. Style: '{mode}'.
+            
+            Task 1: Structured study guide (Markdown headers, bold terms, emojis).
+            Task 2: Top 3 Critical Exam Q&A.
+            Task 3: {count} Practice MCQs (Format: A, B, C, D on new lines).
+            Task 4: Answer Key with 1-sentence logic.
+            
+            Task 5: Knowledge Graph. Create a Mermaid.js flowchart (graph TD).
+            STRICT SYNTAX:
+            - IDs must be simple letters (A, B, C).
+            - ALL labels must be in double quotes: A["Concept Name"]
+            - NO parentheses or brackets inside quotes.
+            - Wrap code EXACTLY in ```mermaid ... ```
+            
+            Source Text: {text}
+            """
+            
+            res = model.generate_content(prompt).text
+            
+            # Extract Graph Code
+            match = re.search(r'```mermaid\n(.*?)\n```', res, re.DOTALL)
+            if match:
+                st.session_state['graph_code'] = match.group(1)
+                st.session_state['notes'] = re.sub(r'```mermaid\n.*?\n```', '', res, flags=re.DOTALL)
+            else:
+                st.session_state['graph_code'] = ""
+                st.session_state['notes'] = res
+            
+            st.rerun()
 
-            text = extract_pdf(file)
-            chunks = chunk_text(text)
-            index = create_vector_store(chunks)
-
-            st.session_state.chunks = chunks
-            st.session_state.index = index
-            st.session_state.preview = " ".join(chunks[:5])
-
-            # ONLY ONE CALL HERE
-            st.session_state.notes = ask_ai(f"""
-            Style: {mode}
-            Create structured notes.
-
-            TEXT:
-            {st.session_state.preview}
-            """)
-
-# ---------------- OUTPUT ---------------- #
-if st.session_state.notes:
-
-    tabs = st.tabs([
-        "📝 Notes","🧠 Graph","💬 Chat",
-        "🤯 Confusion","❌ Misconception",
-        "🎯 Exam","🧠 Gap","⚔️ Debate","🎭 Persona"
-    ])
-
-    # NOTES
-    with tabs[0]:
-        st.markdown(st.session_state.notes)
-
-    # GRAPH (on demand)
-    with tabs[1]:
-        if st.button("Generate Graph"):
-            res = ask_ai(f"""
-            Create Mermaid graph.
-
-            TEXT:
-            {st.session_state.preview}
-            """)
-            render_mermaid(res)
-
-    # CHAT
-    with tabs[2]:
-        q = st.text_input("Ask")
-        if q:
-            ctx = retrieve(q, st.session_state.chunks, st.session_state.index)
-            res = ask_ai(f"Context: {ctx}\nQ: {q}")
-            st.write(res)
-
-    # CONFUSION
-    with tabs[3]:
-        if st.button("Detect Confusion"):
-            st.write(ask_ai(f"Find confusing parts:\n{st.session_state.preview}"))
-
-    # MISCONCEPTION
-    with tabs[4]:
-        if st.button("Find Misconceptions"):
-            st.write(ask_ai(f"Find misconceptions:\n{st.session_state.preview}"))
-
-    # EXAM
-    with tabs[5]:
-        if st.button("Predict Exam"):
-            st.write(ask_ai(f"Predict exam questions:\n{st.session_state.preview}"))
-
-    # GAP
-    with tabs[6]:
-        if st.button("Analyze Gaps"):
-            st.write(ask_ai(f"Find knowledge gaps:\n{st.session_state.preview}"))
-
-    # DEBATE
-    with tabs[7]:
-        if st.button("Debate"):
-            st.write(ask_ai(f"Critically analyze:\n{st.session_state.preview}"))
-
-    # PERSONA
-    with tabs[8]:
-        if st.button("Explain"):
-            st.write(ask_ai(f"Explain as {persona}:\n{st.session_state.preview}"))
+# 8. THE INTERACTIVE TABS
+if st.session_state['notes']:
+    st.markdown("---")
+    t1, t2, t3 = st.tabs(["📝 Study Notes", "🧠 Knowledge Graph", "💬 Document Chat"])
+    
+    with t1:
+        st.download_button("📥 Download Notes", data=st.session_state['notes'], file_name="Lumina_Notes.md", use_container_width=True)
+        st.markdown(st.session_state['notes'])
+        
+    with t2:
+        if st.session_state['graph_code']:
+            mermaid_render(st.session_state['graph_code'])
+        else:
+            st.warning("Diagram could not be rendered for this text. Try a different section.")
+            
+    with t3:
+        st.markdown("#### 💬 Ask anything about the PDF")
+        chat_input = st.chat_input("Ask a question...")
+        if chat_input:
+            st.chat_message("user").write(chat_input)
+            with st.spinner("Analyzing..."):
+                chat_res = model.generate_content(f"Context: {st.session_state['pdf_text']}\nUser: {chat_input}")
+                st.chat_message("ai").write(chat_res.text)
