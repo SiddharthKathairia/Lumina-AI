@@ -1,17 +1,15 @@
 import streamlit as st
 import pymupdf as fitz
 import google.generativeai as genai
-from langchain.text_splitter import RecursiveCharacterTextSplitter
 from sentence_transformers import SentenceTransformer
 import faiss
 import numpy as np
-import re
 import streamlit.components.v1 as components
 
 # ---------------- PAGE CONFIG ---------------- #
 st.set_page_config(page_title="Lumina AI Pro", page_icon="✨", layout="wide")
 
-# ---------------- CUSTOM CSS ---------------- #
+# ---------------- CSS ---------------- #
 st.markdown("""
 <style>
 html, body, [class*="css"] {
@@ -34,116 +32,102 @@ button[kind="primary"] {
     border-radius: 30px !important;
     font-weight: bold !important;
 }
-
 </style>
 """, unsafe_allow_html=True)
 
-# ---------------- API CONFIG ---------------- #
+# ---------------- API ---------------- #
 genai.configure(api_key=st.secrets["GEMINI_API_KEY"])
 model = genai.GenerativeModel("gemini-2.5-flash")
 
 embedder = SentenceTransformer("all-MiniLM-L6-v2")
 
-# ---------------- PDF PARSER ---------------- #
+# ---------------- PDF ---------------- #
 def extract_pdf(file):
     doc = fitz.open(stream=file.read(), filetype="pdf")
     text = ""
-    pages = []
-    for i, page in enumerate(doc):
-        content = page.get_text()
-        pages.append((i+1, content))
-        text += content
-    return text, pages
+    for page in doc:
+        text += page.get_text()
+    return text
 
 # ---------------- CHUNKING ---------------- #
-def chunk_text(text):
-    splitter = RecursiveCharacterTextSplitter(
-        chunk_size=800,
-        chunk_overlap=150
-    )
-    return splitter.split_text(text)
+def chunk_text(text, chunk_size=800, overlap=150):
+    chunks = []
+    start = 0
+    while start < len(text):
+        end = start + chunk_size
+        chunks.append(text[start:end])
+        start += chunk_size - overlap
+    return chunks
 
-# ---------------- VECTOR STORE ---------------- #
+# ---------------- VECTOR ---------------- #
 def create_vector_store(chunks):
     embeddings = embedder.encode(chunks)
-    dimension = embeddings.shape[1]
-    index = faiss.IndexFlatL2(dimension)
+    dim = embeddings.shape[1]
+    index = faiss.IndexFlatL2(dim)
     index.add(np.array(embeddings))
     return index
 
-# ---------------- RETRIEVAL ---------------- #
-def retrieve(query, chunks, index, top_k=3):
-    q_embed = embedder.encode([query])
-    distances, indices = index.search(np.array(q_embed), top_k)
-    return [chunks[i] for i in indices[0]]
+def retrieve(query, chunks, index, k=3):
+    q = embedder.encode([query])
+    _, idx = index.search(np.array(q), k)
+    return [chunks[i] for i in idx[0]]
 
 # ---------------- AI FUNCTIONS ---------------- #
 
 def generate_notes(text, mode, q_count):
-    prompt = f"""
-    You are Lumina AI.
-
+    return model.generate_content(f"""
     Style: {mode}
 
     1. Structured notes
-    2. 3 important Q&A
+    2. 3 key Q&A
     3. {q_count} MCQs
-    4. Answer key
+    4. Answers
 
     TEXT:
     {text}
-    """
-    return model.generate_content(prompt).text
+    """).text
 
 
 def generate_graph(text):
-    prompt = f"""
+    return model.generate_content(f"""
     Create Mermaid graph (graph TD)
 
-    RULES:
-    - IDs A, B, C
-    - Labels in quotes
-    - No special chars
-
     TEXT:
     {text}
-    """
-    return model.generate_content(prompt).text
+    """).text
 
 
-def chat_with_context(query, chunks, index):
-    context = retrieve(query, chunks, index)
-    prompt = f"""
-    Answer using ONLY context.
+def chat(query, chunks, index):
+    ctx = retrieve(query, chunks, index)
+    return model.generate_content(f"""
+    Answer using context only:
 
-    CONTEXT:
-    {context}
+    {ctx}
 
-    QUESTION:
+    Question:
     {query}
-    """
-    return model.generate_content(prompt).text
+    """).text
 
 
-def detect_confusions(text):
+def confusion(text):
     return model.generate_content(f"""
-    Identify confusing parts and explain simply.
+    Find confusing points and explain simply.
 
     TEXT:
     {text}
     """).text
 
 
-def find_misconceptions(text):
+def misconceptions(text):
     return model.generate_content(f"""
-    List misconceptions and correct them.
+    Find misconceptions and correct them.
 
     TEXT:
     {text}
     """).text
 
 
-def predict_exam(text):
+def exam(text):
     return model.generate_content(f"""
     Predict exam questions with probability.
 
@@ -152,33 +136,33 @@ def predict_exam(text):
     """).text
 
 
-def knowledge_gap(text):
+def gaps(text):
     return model.generate_content(f"""
-    Identify learning gaps and roadmap.
+    Find knowledge gaps and roadmap.
 
     TEXT:
     {text}
     """).text
 
 
-def debate_mode(text):
+def debate(text):
     return model.generate_content(f"""
-    Critically analyze and argue.
+    Critically analyze this.
 
     TEXT:
     {text}
     """).text
 
 
-def persona_explain(text, persona):
+def persona(text, p):
     return model.generate_content(f"""
-    Explain as a {persona}.
+    Explain as {p}.
 
     TEXT:
     {text}
     """).text
 
-# ---------------- MERMAID RENDER ---------------- #
+# ---------------- MERMAID ---------------- #
 def render_mermaid(code):
     components.html(f"""
     <div class="mermaid">{code}</div>
@@ -189,12 +173,10 @@ def render_mermaid(code):
     """, height=500)
 
 # ---------------- SESSION ---------------- #
-for key in [
-    "chunks","index","notes","graph","confusion",
-    "misconception","exam","gap","debate","persona_text"
-]:
-    if key not in st.session_state:
-        st.session_state[key] = None
+keys = ["chunks","index","notes","graph","conf","misc","exam","gap","deb","pers"]
+for k in keys:
+    if k not in st.session_state:
+        st.session_state[k] = None
 
 # ---------------- UI ---------------- #
 st.title("✨ Lumina AI Pro")
@@ -205,25 +187,19 @@ file = st.file_uploader("Upload PDF", type=["pdf"])
 col1, col2 = st.columns(2)
 
 with col1:
-    mode = st.selectbox("Mode", [
-        "Academic Deep Dive",
-        "Exam Revision",
-        "Explain Like I'm 5"
-    ])
+    mode = st.selectbox("Mode", ["Deep Dive","Exam","Simple"])
 
 with col2:
-    persona = st.selectbox("Persona", [
-        "Professor","Beginner","CEO","Researcher"
-    ])
+    p = st.selectbox("Persona", ["Professor","Beginner","CEO","Researcher"])
 
-q_count = st.slider("MCQs", 3, 15, 5)
+q = st.slider("MCQs", 3, 15, 5)
 
-# ---------------- PROCESS ---------------- #
+# ---------------- RUN ---------------- #
 if file:
     if st.button("🚀 Analyze", use_container_width=True):
         with st.spinner("Processing..."):
 
-            text, _ = extract_pdf(file)
+            text = extract_pdf(file)
             chunks = chunk_text(text)
             index = create_vector_store(chunks)
 
@@ -232,14 +208,14 @@ if file:
 
             preview = " ".join(chunks[:5])
 
-            st.session_state.notes = generate_notes(preview, mode, q_count)
+            st.session_state.notes = generate_notes(preview, mode, q)
             st.session_state.graph = generate_graph(preview)
-            st.session_state.confusion = detect_confusions(preview)
-            st.session_state.misconception = find_misconceptions(preview)
-            st.session_state.exam = predict_exam(preview)
-            st.session_state.gap = knowledge_gap(preview)
-            st.session_state.debate = debate_mode(preview)
-            st.session_state.persona_text = persona_explain(preview, persona)
+            st.session_state.conf = confusion(preview)
+            st.session_state.misc = misconceptions(preview)
+            st.session_state.exam = exam(preview)
+            st.session_state.gap = gaps(preview)
+            st.session_state.deb = debate(preview)
+            st.session_state.pers = persona(preview, p)
 
 # ---------------- OUTPUT ---------------- #
 if st.session_state.notes:
@@ -257,21 +233,15 @@ if st.session_state.notes:
         render_mermaid(st.session_state.graph)
 
     with tabs[2]:
-        query = st.text_input("Ask anything")
-
-        if query:
-            res = chat_with_context(
-                query,
-                st.session_state.chunks,
-                st.session_state.index
-            )
-            st.write(res)
+        qn = st.text_input("Ask anything")
+        if qn:
+            st.write(chat(qn, st.session_state.chunks, st.session_state.index))
 
     with tabs[3]:
-        st.markdown(st.session_state.confusion)
+        st.markdown(st.session_state.conf)
 
     with tabs[4]:
-        st.markdown(st.session_state.misconception)
+        st.markdown(st.session_state.misc)
 
     with tabs[5]:
         st.markdown(st.session_state.exam)
@@ -280,7 +250,7 @@ if st.session_state.notes:
         st.markdown(st.session_state.gap)
 
     with tabs[7]:
-        st.markdown(st.session_state.debate)
+        st.markdown(st.session_state.deb)
 
     with tabs[8]:
-        st.markdown(st.session_state.persona_text)
+        st.markdown(st.session_state.pers)
