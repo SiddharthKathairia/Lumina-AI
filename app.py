@@ -1,22 +1,21 @@
 import streamlit as st
 import PyPDF2
 import google.generativeai as genai
+import re
+import streamlit.components.v1 as components
 
 # 1. Page Config
 st.set_page_config(page_title="Lumina AI", page_icon="✨", layout="centered")
 
 # 2. THE EXTREME CSS OVERRIDE
-# This completely rewrites Streamlit's default UI rules
 custom_css = """
 <style>
-/* Import a modern AI-startup font */
 @import url('https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;600;800&display=swap');
 
 html, body, [class*="css"]  {
     font-family: 'Outfit', sans-serif;
 }
 
-/* Animated Gradient Background */
 .stApp {
     background: linear-gradient(-45deg, #0f0c29, #302b63, #0f0c29, #24243e);
     background-size: 400% 400%;
@@ -29,10 +28,8 @@ html, body, [class*="css"]  {
     100% { background-position: 0% 50%; }
 }
 
-/* Hide Default Streamlit Junk */
 #MainMenu, footer, header {visibility: hidden !important;}
 
-/* Glassmorphism Cards */
 div[data-testid="stVerticalBlock"] > div[style*="flex-direction: column;"] > div[data-testid="stVerticalBlock"] {
     background: rgba(255, 255, 255, 0.03);
     backdrop-filter: blur(16px);
@@ -44,13 +41,6 @@ div[data-testid="stVerticalBlock"] > div[style*="flex-direction: column;"] > div
     transition: transform 0.3s ease;
 }
 
-/* Hover effect for the cards */
-div[data-testid="stVerticalBlock"] > div[style*="flex-direction: column;"] > div[data-testid="stVerticalBlock"]:hover {
-    transform: translateY(-5px);
-    border: 1px solid rgba(138, 43, 226, 0.3);
-}
-
-/* Customizing the big button */
 button[kind="primary"] {
     background: linear-gradient(90deg, #8A2BE2, #FF4B4B) !important;
     border: none !important;
@@ -67,7 +57,6 @@ button[kind="primary"]:hover {
     transform: scale(1.02) !important;
 }
 
-/* Glowing Title */
 .lumina-title {
     font-size: 5rem;
     font-weight: 800;
@@ -87,26 +76,66 @@ button[kind="primary"]:hover {
     font-weight: 300;
     margin-top: 0px;
 }
+
+/* Tab Styling */
+.stTabs [data-baseweb="tab-list"] {
+    gap: 24px;
+}
+.stTabs [data-baseweb="tab"] {
+    height: 50px;
+    white-space: pre-wrap;
+    background-color: transparent;
+    border-radius: 4px 4px 0px 0px;
+    gap: 1px;
+    padding-top: 10px;
+    padding-bottom: 10px;
+}
+.stTabs [aria-selected="true"] {
+    background-color: rgba(138, 43, 226, 0.2);
+    border-bottom: 2px solid #8A2BE2;
+}
 </style>
 """
 st.markdown(custom_css, unsafe_allow_html=True)
 
-# 3. Connect to AI (REPLACE WITH YOUR st.secrets KEY!)
+# 3. Connect to AI
 genai.configure(api_key=st.secrets["GEMINI_API_KEY"])
 model = genai.GenerativeModel('gemini-2.5-flash')
+
+# Helper function to render Mermaid graphs
+def mermaid(code: str):
+    components.html(
+        f"""
+        <div class="mermaid" style="display: flex; justify-content: center; background-color: rgba(255,255,255,0.9); padding: 20px; border-radius: 10px;">
+            {code}
+        </div>
+        <script type="module">
+            import mermaid from 'https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.esm.min.mjs';
+            mermaid.initialize({{ startOnLoad: true, theme: 'default' }});
+        </script>
+        """,
+        height=500
+    )
 
 # 4. CUSTOM HERO SECTION
 st.markdown("<div class='lumina-title'>Lumina</div>", unsafe_allow_html=True)
 st.markdown("<div class='lumina-subtitle'>Upload. Process. Dominate your exams.</div><br><br>", unsafe_allow_html=True)
 
-# 5. THE GLASSMORPHIC UPLOAD CARD
+# 5. INITIALIZE MEMORY
+if 'pdf_content' not in st.session_state:
+    st.session_state['pdf_content'] = ""
+if 'generated_notes' not in st.session_state:
+    st.session_state['generated_notes'] = ""
+if 'mermaid_code' not in st.session_state:
+    st.session_state['mermaid_code'] = ""
+
+# 6. UPLOAD & SETTINGS
 with st.container():
     st.markdown("### 📄 1. Feed the AI")
     uploaded_file = st.file_uploader("Drop your dense lecture material here", type=["pdf"], label_visibility="collapsed")
 
 st.markdown("<br>", unsafe_allow_html=True)
 
-# 6. THE GLASSMORPHIC SETTINGS CARD
 with st.container():
     st.markdown("### 🎛️ 2. Tune the Engine")
     c1, c2 = st.columns(2)
@@ -117,49 +146,74 @@ with st.container():
 
 st.markdown("<br>", unsafe_allow_html=True)
 
-# 7. THE ENGINE LOGIC
+# 7. GENERATION LOGIC
 if uploaded_file:
-    # A massive centered button
     if st.button("✨ IGNITE NEURAL NETWORK", type="primary", use_container_width=True):
-        with st.spinner("Decoding document structure..."):
+        with st.spinner("Decoding document structure and mapping knowledge graph..."):
             
-            # Read PDF
             pdf_reader = PyPDF2.PdfReader(uploaded_file)
             raw_text = "".join([page.extract_text() for page in pdf_reader.pages])
+            st.session_state['pdf_content'] = raw_text 
             
-            # Master Prompt
+            # The Ultimate Prompt with the Graph Command
             prompt = f"""
-            You are Lumina, an elite AI teaching assistant. The user requested the '{study_mode}' style.
+            You are Lumina, an elite AI teaching assistant. Style: '{study_mode}'.
             
-            Task 1: Study Guide
-            - Create a highly structured guide using Markdown headers (##), bold text, and emojis.
-            - Break down concepts into extremely digestible bullet points.
-            
-            Task 2: High-Yield Exam Q&A
-            - Format strictly:
-              **Q: [Question]**
-              *A: [Answer]*
-            
-            Task 3: {quiz_count} Practice MCQs
-            - Format strictly:
-              **1. [Question]**
-              A) [Option]
-              B) [Option]
-              C) [Option]
-              D) [Option]
-              
-            Task 4: Answer Key with 1-sentence logic explanations.
+            Task 1: Highly structured study guide (Markdown, emojis, bullet points).
+            Task 2: Top 3 Exam Q&A.
+            Task 3: {quiz_count} Practice MCQs (A, B, C, D on separate lines).
+            Task 4: Answer Key with explanations.
+            Task 5: Knowledge Graph. Create a Mermaid.js flowchart (graph TD) connecting the core concepts of the text. Keep node text very short and concise. Wrap the code EXACTLY in a ```mermaid ... ``` block.
             
             Text: {raw_text}
             """
             
-            # Execute
             response = model.generate_content(prompt)
-            st.markdown("<br>", unsafe_allow_html=True)
+            full_response = response.text
             
-            # 8. THE RESULTS CARD
-            with st.container():
-                st.markdown("### 🎓 Knowledge Extracted")
-                st.markdown("---")
-                st.markdown(response.text)
-            st.balloons()
+            # Extract the Mermaid code using Regex
+            mermaid_match = re.search(r'```mermaid\n(.*?)\n```', full_response, re.DOTALL)
+            if mermaid_match:
+                st.session_state['mermaid_code'] = mermaid_match.group(1)
+                # Remove the mermaid block from the standard notes so it doesn't look messy
+                st.session_state['generated_notes'] = re.sub(r'```mermaid\n.*?\n```', '', full_response, flags=re.DOTALL)
+            else:
+                st.session_state['mermaid_code'] = ""
+                st.session_state['generated_notes'] = full_response
+                
+            st.rerun()
+
+# 8. THE APP-LIKE INTERFACE (TABS)
+if st.session_state['generated_notes']:
+    st.markdown("### 🎓 Knowledge Extracted")
+    
+    # Create Sleek Navigation Tabs
+    tab1, tab2, tab3 = st.tabs(["📝 Study Guide & Quiz", "🧠 Knowledge Graph", "💬 Chat w/ PDF"])
+    
+    with tab1:
+        with st.container():
+            st.download_button("📥 Download Study Guide (.md)", data=st.session_state['generated_notes'], file_name="Lumina_Guide.md", use_container_width=True)
+            st.markdown("---")
+            st.markdown(st.session_state['generated_notes'])
+            
+    with tab2:
+        with st.container():
+            st.markdown("#### 🗺️ Concept Architecture")
+            st.caption("Auto-generated visual map of the document's core concepts.")
+            if st.session_state['mermaid_code']:
+                # Render the extracted code
+                mermaid(st.session_state['mermaid_code'])
+            else:
+                st.warning("Could not generate a clean graph for this specific document. Try a different PDF.")
+                
+    with tab3:
+        with st.container():
+            st.markdown("#### 💬 Ask Lumina")
+            st.caption("Query the AI directly about this document.")
+            user_question = st.chat_input("E.g., Can you explain the main idea in simpler terms?")
+            if user_question:
+                st.chat_message("user").write(user_question)
+                with st.spinner("Analyzing memory..."):
+                    chat_prompt = f"Answer based strictly on this text:\n{st.session_state['pdf_content']}\n\nUser: {user_question}"
+                    chat_response = model.generate_content(chat_prompt)
+                    st.chat_message("ai").write(chat_response.text)
