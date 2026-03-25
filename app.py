@@ -59,7 +59,7 @@ header {{visibility: hidden;}}
 st.markdown(bg_css, unsafe_allow_html=True)
 
 # 3. Connect to AI (REPLACE YOUR KEY!)
-genai.configure(api_key=st.secrets["AIzaSyAYJA8lSjuR4reKoro0_FpTFXPV7lB0BP8"])
+genai.configure(api_key=st.secrets["GEMINI_API_KEY"])
 model = genai.GenerativeModel('gemini-2.5-flash')
 
 # 4. HERO SECTION (Centered and clean)
