@@ -1,6 +1,3 @@
 streamlit
-pymupdf
+PyPDF2
 google-generativeai
-sentence-transformers
-faiss-cpu
-numpy
